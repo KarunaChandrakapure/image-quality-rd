@@ -1,0 +1,112 @@
+# ============================================================
+#  adaptive_config.yaml  -  settings for 5.adaptive_enhance.py
+#  Per image:  1. resize  ->  2. diagnose (dark / bright / noisy / blurry / ok)
+#              3. apply ONLY the fixes that image needs
+#  Edit values here, then re-run the script. No code changes needed.
+# ============================================================
+
+general:
+  input_dir: "F:/kpit/image-data-quality/sample2"     # full-resolution originals
+  output_dir: "F:/kpit/image-data-quality/output"     # results go to output_dir/<input folder name>,
+                                                      # e.g. output/sample2 (re-running the same
+                                                      # input overwrites that subfolder's files)
+  extensions: [".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"]
+  recursive: false
+  limit: 0                    # process only the first N images (0 = all). Handy for test runs
+  output_format: "png"        # png (lossless, recommended for model input) | jpg | same
+  jpg_quality: 95
+  # Output: one file per input, same name, in output_dir. Each image in it is exactly
+  # resize.width x resize.height (448x256).
+  #   write_original  write_enhanced   file contains
+  #   true            true             original + enhanced, joined per layout (896x256)
+  #   false           true             enhanced only (448x256) - model-ready
+  #   true            false            original only (448x256) - resized, no enhancement
+  # A frame that needed no enhancement is always written as the original only.
+  write_original: true        # include the resized original
+  write_enhanced: true        # include the resized + enhanced image
+  layout: "side_by_side"      # when both: side_by_side (original left) | stacked (original on top)
+  labels: false               # true = write the diagnosis / actions on the images (for review
+                              # only - never feed labelled images to a model). The same
+                              # information is always in _report.csv
+  save_report: true           # _report.csv: metrics, issues found, actions taken
+
+# ---------------- Step 1: resize ----------------
+resize:
+  enabled: true
+  width: 448                  # model input size. nuScenes is 1600x900 (16:9);
+  height: 256                 # 448x256 keeps that shape (1.75 vs 1.78)
+  mode: "stretch"             # stretch = exactly width x height (fine when the aspect matches)
+                              # pad     = keep aspect, fit inside, fill the rest with pad_value
+                              # crop    = keep aspect, fill completely, cut the overflow (centre)
+  pad_value: 0
+  interpolation: "area"       # area (best for shrinking) | linear | cubic | lanczos
+
+# ---------------- Step 2: diagnosis thresholds ----------------
+# Calibrated on nuScenes v1.0-mini keyframes resized to 448x256 (day vs night scenes).
+# Every metric is written to _report.csv so you can re-tune on your own data.
+diagnose:
+  # brightness = mean luma 0-255.  Day frames: 99-116 (5th-95th pct).  Night: 9-79
+  dark_mean: 80               # below -> "dark"
+  bright_mean: 160            # above -> "bright"
+  clipped_white_pct: 12       # or more than this % of pixels at pure white -> "bright"
+  # noise = sensor-noise level measured in the flattest areas (sky, road, walls).
+  # Day scenes: 0.33-0.84.  Night scenes: 1.18-2.37
+  noise_sigma: 1.0            # above -> "noisy"
+  # blur = re-blur score 0 (sharp) - 1 (very blurry). Content-independent.
+  # Sharp frames: 0.19-0.32.  Gaussian blur s=1: 0.36-0.49.  5px motion blur: 0.41-0.55
+  blur_score: 0.25           # above -> "blurry"
+  strong_blur_score: 0.40    # above -> "very blurry" (stronger sharpening)
+
+# ---------------- Step 3: fixes ----------------
+# Order: denoise -> exposure (brighten / highlights) -> levels -> local contrast
+#        -> sharpen -> colour.  All tone and sharpening work on brightness (luma);
+#        colour is only touched by the final saturation step.
+fix:
+  # true  = every frame gets the base treatment (levels + local contrast + light
+  #         sharpen + colour), plus the fixes for its diagnosed issues. Gives all
+  #         frames the same, consistent look - recommended for model input.
+  # false = "ok" frames are left exactly as resized; only diagnosed issues are fixed.
+  enhance_all: true
+
+  denoise:                    # for "noisy"  (and always before brightening a dark frame)
+    h_per_sigma: 3.0          # luma denoise strength = this x measured noise level
+    h_min: 3                  # (night frames measure ~2 -> h ~6)
+    h_max: 10
+    color_h: 2                # light colour-noise cleanup (0 = off). Night frames have colour speckle
+
+  brighten:                   # for "dark" - local tone mapping (lifts shadows, keeps lights)
+    target_mean: 0.32         # aim brightness (0-1)
+    gamma_min: 0.35           # strongest lift allowed
+    radius: 20                # px. How "local" the lift is
+    max_gain: 2.2             # never brighten any area more than this
+    color_restore: 0.5        # 0-1, give part of the brightening to colour (avoids washed-out look)
+
+  darken:                     # for "bright"
+    highlight_knee: 0.85      # compress tones above this to recover near-white detail
+    highlight_strength: 0.5   # 0-1
+
+  levels:                     # removes the flat / hazy look: darkest pixels -> black, brightest -> white
+    enabled: true
+    clip_low: 0.5             # % of pixels allowed to become pure black
+    clip_high: 0.5            # % of pixels allowed to become pure white
+    max_gain: 1.4             # max contrast stretch (protects fog / rain frames)
+    strength: 1.0             # 0-1 blend
+
+  local_contrast:             # CLAHE: objects stand out from similar-toned surroundings
+    enabled: true
+    clip: 1.5                 # 1-3. Higher = stronger, but flat areas can get blotchy
+    tile: 8
+    strength: 0.3             # 0-1 blend
+
+  sharpen:                    # edge-gated CAS (same as 4.cas_sharpen.py)
+    ok_sharpness: 0.6         # CAS 0-1 for frames with no blur (used when enhance_all: true)
+    sharpness: 0.8            # for "blurry"
+    strong_sharpness: 1.0     # for "very blurry"
+    edge_sigma: 1.2           # blur (px) before measuring edges. Bigger = only larger shapes
+    edge_low: 0.08            # edges weaker than this are not sharpened (texture, noise)
+    edge_high: 0.35           # edges stronger than this get full sharpening.
+                              # Raise both to sharpen less of the image
+
+  color:
+    saturation: 1.08          # gentle colour boost (1.0 = unchanged)
+    max_saturation: 1.5

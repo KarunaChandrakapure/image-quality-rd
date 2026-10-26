@@ -1,0 +1,14 @@
+# Image data and results (keep local, too large for git)
+output/
+sample*/
+v1.0-mini/
+chatgpt_output/
+
+# Archives
+*.rar
+*.tar
+*.zip
+
+# Python
+__pycache__/
+*.pyc
