@@ -1,0 +1,184 @@
+# ============================================================
+#  night_config.yaml  -  settings for 6.night_enhance.py
+#  Runs several night-time methods on every image so they can be compared one by one.
+#  Two problems are targeted:
+#    low light  -> gamma, clahe, shadow_lift, lime, retinex, dehaze_inverse
+#    glare      -> glare_suppress, highlight_rolloff  (headlights, street lights)
+#  plus "night_pipeline", which chains the chosen steps into one result.
+#  Edit values here, then re-run the script. No code changes needed.
+# ============================================================
+
+general:
+  input_dir: "F:/kpit/image-data-quality/sample4"
+  output_dir: "F:/kpit/image-data-quality/output"   # results go to output/<input folder>_night/
+  extensions: [".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"]
+  recursive: false
+  limit: 0                    # first N images only (0 = all)
+  output_format: "png"
+  jpg_quality: 95
+  # Per method: output/<input>_night/<method>/<image>.png
+  write_original: true        # include the resized original next to each method's result
+  layout: "side_by_side"      # side_by_side | stacked
+  # Overview: output/<input>_night/_all_methods/<image>.png
+  # Grid of: original, then every enabled method in the order of "methods" below,
+  # left to right, top to bottom. The order is also printed when the script runs.
+  save_grid: true
+  grid_columns: 4
+  labels: false               # true = write method names on the grid tiles (review only)
+  save_report: true           # _report.csv: metrics for every image x method
+
+# ---------------- Which methods to run (order = grid order) ----------------
+methods:
+  # --- low light ---
+  - gamma                     # global gamma brighten. Baseline: lifts everything, incl. glare
+  - clahe                     # local histogram equalisation on brightness
+  - shadow_lift               # local tone mapping: lifts dark areas, leaves lights alone
+  - lime                      # LIME-style: estimate the illumination map, divide it out
+  - retinex                   # multi-scale Retinex on brightness
+  - dehaze_inverse            # invert -> dehaze -> invert (Dong et al. 2011)
+  # --- glare ---
+  - glare_suppress            # remove the glow (veiling glare) around light sources
+  - highlight_rolloff         # compress the brightest tones
+  # --- combined ---
+  - night_pipeline            # denoise -> glare -> low light -> levels -> contrast -> sharpen -> colour
+  # --- learned models (need PyTorch + weights in models_dir; remove these lines to skip) ---
+  - scunet                    # deep denoiser for real camera noise            (Apache-2.0)
+  - zero_dce_pp               # deep low-light enhancement                     (NON-COMMERCIAL)
+  - flare7kpp                 # deep night glare / flare removal               (NON-COMMERCIAL)
+  - night_pipeline_dl         # flare7kpp -> scunet -> low light -> levels -> contrast -> sharpen -> colour
+
+# Folder with the downloaded weights (git-ignored):
+#   scunet_color_real_psnr.pth   github.com/cszn/KAIR/releases/download/v1.0/scunet_color_real_psnr.pth
+#   zero_dce_pp_Epoch99.pth      github.com/Li-Chongyi/Zero-DCE_extension  (Zero-DCE++/snapshots_Zero_DCE++/Epoch99.pth)
+#   Flare7K/                     git clone https://github.com/ykdai/Flare7K   (network code)
+#   flare7kpp/net_g_last.pth     Flare7K++ checkpoint, Google Drive link in the Flare7K README
+models_dir: "F:/kpit/image-data-quality/models"
+
+# Low-light methods amplify noise. true = run "denoise" before each of them, so the
+# comparison is about brightening, not about who amplifies noise the most.
+denoise_before_low_light: true
+
+# ---------------- Step 1: resize (same as adaptive_config.yaml) ----------------
+resize:
+  enabled: true
+  width: 448
+  height: 256
+  mode: "stretch"             # stretch | pad | crop
+  pad_value: 0
+  interpolation: "area"
+
+# ============================================================
+#  Method settings
+# ============================================================
+params:
+
+  denoise:                    # edge-preserving non-local means on brightness, light on colour
+    h_per_sigma: 2.2          # strength = this x measured noise (night frames measure ~2)
+    h_min: 3
+    h_max: 8
+    color_h: 3                # colour speckle cleanup (0 = off)
+    template_window: 5        # smaller windows = less "smeared / painted" look
+    search_window: 15
+
+  gamma:
+    target_mean: 0.30         # aim brightness 0-1
+    gamma_min: 0.40           # strongest allowed lift
+
+  clahe:
+    clip: 2.5
+    tile: 8
+
+  shadow_lift:                # same as brighten in adaptive_config.yaml
+    target_mean: 0.32
+    gamma_min: 0.35
+    radius: 20                # px. How local the lift is
+    max_gain: 2.2
+    color_restore: 0.5        # give part of the brightening back to colour (0-1)
+
+  lime:
+    gamma: 0.6                # 0-1, applied to the illumination map. Higher = stronger brightening
+    t_min: 0.15               # floor for the illumination map (stops dividing by ~0 and
+                              # blowing up noise in near-black areas)
+    smooth_d: 9               # bilateral filter diameter for the illumination map
+    smooth_sigma_color: 0.15
+    smooth_sigma_space: 15
+    strength: 0.7             # 0-1 blend with the original
+
+  retinex:
+    scales: [15, 60, 180]     # Gaussian sigmas (px) at 448x256
+    clip_low: 1.0             # % clipped to black after normalising
+    clip_high: 99.5
+    strength: 0.6             # 0-1 blend with the original (pure Retinex looks flat/grey)
+
+  dehaze_inverse:
+    patch: 7                  # dark-channel patch size (px)
+    omega: 0.8                # haze removal amount
+    t_min: 0.1
+
+  glare_suppress:             # headlights / street lights
+    light_threshold: 0.92     # brightness 0-1 above which a pixel counts as a light source
+    min_light_px: 3           # ignore lone bright specks smaller than this (px area)
+    glow_sigmas: [6, 20]      # px. Size of the glow around a light (small + wide halo)
+    glow_weights: [0.6, 0.4]
+    strength: 0.8             # 0-1. How much of the estimated glow is removed
+    min_keep: 0.5             # never darken any pixel below this share of its brightness
+    keep_core: true           # leave the light itself white (it really is a light)
+    core_feather: 4           # px. Soft transition from the light to the de-glowed area
+
+  highlight_rolloff:
+    highlight_knee: 0.75      # compress tones above this
+    highlight_strength: 0.7
+
+  sharpen:                    # edge-gated CAS (4.cas_sharpen.py)
+    amount: 0.5
+    edge_sigma: 1.5           # night: larger -> ignores noise
+    edge_low: 0.10
+    edge_high: 0.40
+
+  levels:
+    clip_low: 0.3
+    clip_high: 0.3
+    max_gain: 1.3
+    strength: 1.0
+
+  local_contrast:
+    clip: 1.5
+    tile: 8
+    strength: 0.25
+
+  color:
+    saturation: 1.05
+    max_saturation: 1.5
+
+  # ---- learned models ----
+  scunet:
+    weights: "scunet_color_real_psnr.pth"
+    strength: 1.0             # 0-1 blend with the input
+
+  zero_dce_pp:
+    weights: "zero_dce_pp_Epoch99.pth"
+    strength: 1.0
+
+  flare7kpp:
+    repo: "Flare7K"           # cloned repo folder inside models_dir (network code)
+    weights: "flare7kpp/net_g_last.pth"
+    input_mode: "resize"      # the model only takes square images:
+                              # resize = stretch to model_size x model_size and back (official way)
+                              # pad    = keep proportions, pad the frame out to a square
+    model_size: 512           # the size it was trained on (multiple of 128)
+    keep_light_source: true   # put the lamp / headlight itself back, remove only its glow
+    strength: 1.0
+
+  # ---- pipelines ----
+  # Step names: denoise | scunet | glare_suppress | highlight_rolloff | flare7kpp |
+  #             low_light | levels | local_contrast | sharpen | color
+  night_pipeline:             # classical only
+    low_light: "shadow_lift"  # gamma | clahe | shadow_lift | lime | retinex | dehaze_inverse | zero_dce_pp
+    steps: [denoise, glare_suppress, low_light, levels, local_contrast, sharpen, color]
+                              # remove a name to skip that step
+
+  night_pipeline_dl:          # learned models for the two problems you flagged: glare and noise
+    low_light: "shadow_lift"  # try "zero_dce_pp" too
+    steps: [flare7kpp, scunet, low_light, levels, local_contrast, sharpen, color]
+                              # glare is removed first, on the untouched frame (what the model
+                              # was trained on); denoising before brightening keeps grain down

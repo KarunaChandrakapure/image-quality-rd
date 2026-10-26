@@ -4,6 +4,9 @@ sample*/
 v1.0-mini/
 chatgpt_output/
 
+# Downloaded model weights and third-party model code
+models/
+
 # Archives
 *.rar
 *.tar
