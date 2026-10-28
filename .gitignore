@@ -3,6 +3,10 @@ output/
 sample*/
 v1.0-mini/
 chatgpt_output/
+argo_waymo_scenes/
+fixed_saturation/
+hue_sat_output
+
 
 # Downloaded model weights and third-party model code
 models/
@@ -11,6 +15,11 @@ models/
 *.rar
 *.tar
 *.zip
+*.avi
+*.mp4
+*.csv
+*.jpg
+*.png
 
 # Python
 __pycache__/
