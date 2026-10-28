@@ -1,4 +1,0 @@
-# Install:  pip install -r requirements.txt
-opencv-python>=4.10
-numpy>=2.0
-PyYAML>=6.0
