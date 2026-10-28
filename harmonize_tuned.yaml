@@ -1,0 +1,12 @@
+score: 2.6582
+params:
+  white_balance.strength: 0.9004
+  tone.strength: 0.9559
+  tone.levels_max_gain: 1.1114
+  local_contrast.base: 0.1277
+  local_contrast.gain: 0.1015
+  sharpen.base: 0.43
+  color.strength: 0.6104
+  color.max_factor: 2.7939
+  color.protect: 37.2603
+  denoise.h_per_sigma: 1.7705

@@ -1,0 +1,133 @@
+# ============================================================
+#  harmonize_config.yaml  -  settings for 13.harmonize.py
+#  Goal: every image, from any dataset, ends up clear and with the SAME look:
+#  neutral tint, similar brightness / contrast / colourfulness, low noise, crisp edges.
+#  Each correction is sized per image from its measurements, so a grey nuScenes frame
+#  gets more colour, a blue Waymo frame gets its tint removed, and an Argo frame that is
+#  already close to the target is barely touched.
+#
+#  Workflow:
+#    1. python 13.harmonize.py --analyze     measure all datasets, suggest targets
+#    2. python 13.harmonize.py --tune 40     search the best strengths -> harmonize_tuned.yaml
+#    3. python 13.harmonize.py               process all datasets (uses the tuned values)
+# ============================================================
+
+# ---------------- Data ----------------
+datasets:                     # name -> folder (searched recursively). "every" = use every Nth image
+  - {name: nuscenes, path: "F:/kpit/image-data-quality/v1.0-mini/samples", every: 4}
+  - {name: argo,     path: "F:/kpit/image-data-quality/argo_waymo_scenes/argo", every: 1}
+  - {name: waymo,    path: "F:/kpit/image-data-quality/argo_waymo_scenes/waymo", every: 6}
+extensions: [".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"]
+
+output:
+  dir: "F:/kpit/image-data-quality/output/harmonized"   # -> <dir>/<dataset>/<same sub-folders>
+  format: "png"
+  write_original: true        # true = original | result side by side, false = result only
+  layout: "side_by_side"      # side_by_side | stacked
+  save_report: true           # _report.csv (per image) + _summary.csv (per dataset)
+
+# ---------------- Working size ----------------
+resize:
+  mode: "width"               # width = scale to `width`, keep aspect ratio (Waymo stays 3:2)
+                              # exact = stretch to width x height | none = keep native size
+  width: 448
+  height: 256
+  interpolation: "area"
+
+# ---------------- Targets: the common look every image is pulled towards ----------------
+# Set from Argo (the most natural-looking dataset) by --analyze. Units: luma 0-255;
+# colour = mean |Cr-128|,|Cb-128| (same score as 9/10.*.py); cast = mean Cr/Cb offset of
+# near-grey pixels (0,0 = neutral, negative Cr + positive Cb = blue tint).
+# Measured (day frames, median):   brightness  contrast  colour  colourfulness  tint
+#   argo                              105        51       5.3        29         2.7
+#   nuscenes                          109        48       2.6        11         1.0  (grey, flat)
+#   waymo                              93        39      12.2        33         8.9  (blue tint)
+targets:
+  brightness: 105             # mean luma (Argo level)
+  contrast: 50                # std of luma (Argo level)
+  colour: 6.0                 # colour score: a little above Argo (5.3) for clear but natural colour
+  cast_cr: 0.0                # tint target, 0 = neutral grey
+  cast_cb: 0.0
+
+night:                        # night frames keep their own brightness / colour targets
+  # night = noise > min_noise AND (mean brightness < max_brightness OR top of frame
+  # < max_sky_brightness). The noise condition stops dim overcast days (Waymo) and daytime
+  # frames with a dark top (tall buildings, trees, side cameras) from counting as night.
+  max_brightness: 80
+  max_sky_brightness: 85
+  sky_fraction: 0.25
+  min_noise: 1.0              # nuScenes night ~1.6-2.4; day frames of all datasets ~0.3-0.8
+  brightness: 60              # don't turn night into day
+  contrast: 45
+  colour: 5.0
+
+# ---------------- Corrections (applied in this order) ----------------
+denoise:                      # only when measured noise is above min_noise (night, rain, dark)
+  min_noise: 0.9
+  h_per_sigma: 2.5            # same brightness-adaptive denoise as 7.night_clean.py
+  h_min: 3
+  h_max: 9
+  color_h: 3
+  template_window: 5
+  search_window: 15
+  adaptive: {enabled: true, dark_factor: 1.3, bright_factor: 0.7, dark_level: 0.10, bright_level: 0.40, radius: 8}
+
+white_balance:                # remove colour tint (e.g. Waymo's blue)
+  strength: 0.8               # 0-1 share of the measured tint removed
+  max_shift: 20               # never shift Cr/Cb by more than this (protects scenes that really
+                              # are one colour, e.g. a red-lit tunnel)
+  neutral_chroma: 20          # pixels with chroma below this count as "should be grey"
+
+tone:
+  levels_clip: 0.5            # % of pixels allowed to clip to black / white when stretching
+  levels_max_gain: 1.4        # max contrast stretch
+  strength: 0.7               # 0-1 how far brightness is moved toward the target
+  gamma_min: 0.6              # limits for the brightness curve
+  gamma_max: 1.5
+
+local_contrast:               # CLAHE: separates objects from the background
+  base: 0.15                  # always applied (0-1 blend)
+  gain: 0.6                   # extra strength per unit of missing contrast vs target
+  max: 0.45
+  clip: 1.5
+  tile: 8
+
+sharpen:                      # edge-gated CAS, skips night sky / flat dark areas (7.night_clean.py)
+  base: 0.5                   # CAS amount for a typical frame
+  blur_gain: 2.0              # extra amount per unit of blur score above blur_ref
+  blur_ref: 0.28              # nuScenes / Argo sharp frames measure ~0.2-0.32
+  max: 1.0
+  edge_sigma: 1.2
+  edge_low: 0.08
+  edge_high: 0.35
+  skip_flat_dark: {enabled: true, dark_level: 0.08, flat_std: 0.02, radius: 6}
+
+color:                        # bring colourfulness to the target, vibrance-style
+  strength: 0.8               # 0-1 how far colour is moved toward the target
+  min_factor: 0.6             # never reduce colour more than this
+  max_factor: 3.0             # never boost colour more than this (nuScenes needs ~2.5-3x)
+  protect: 40                 # chroma above which pixels are protected from boosting
+                              # (already-vivid paint, signs, lights don't over-saturate)
+  dark_protect: 0.15          # no colour boost in very dark pixels (avoids colour noise)
+
+# ---------------- Tuning (--tune N) ----------------
+# Random search over these ranges. Each trial processes `per_dataset` images from every
+# dataset and scores how close every dataset lands to the targets (and to each other),
+# with penalties for added noise or lost sharpness. Lower = better.
+tune:
+  per_dataset: 16
+  seed: 0
+  output: "F:/kpit/image-data-quality/harmonize_tuned.yaml"   # best values, used automatically
+  use_tuned: true             # false = ignore harmonize_tuned.yaml and use the values above
+  weights: {brightness: 1.0, contrast: 1.0, colour: 1.5, cast: 1.0, spread: 1.0, noise: 2.0, sharpness: 1.0}
+  space:                      # dotted.path: [low, high]
+    white_balance.strength: [0.5, 1.0]
+    tone.strength: [0.3, 1.0]
+    tone.levels_max_gain: [1.1, 1.6]
+    local_contrast.base: [0.0, 0.3]
+    local_contrast.gain: [0.0, 1.0]
+    sharpen.base: [0.3, 0.8]
+    color.strength: [0.5, 1.0]
+    color.max_factor: [1.5, 3.5]
+    color.protect: [25, 60]
+    denoise.h_per_sigma: [1.5, 3.0]

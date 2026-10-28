@@ -1,18 +1,4 @@
 # Install:  pip install -r requirements.txt
-# Versions are the ones this project was developed and tested with.
-
-# Core - needed by every script (1, 4, 5, 7, 8 and the classical methods in 6)
 opencv-python>=4.10
 numpy>=2.0
 PyYAML>=6.0
-
-# 2.deblur_compare.py, 3.chatgpt.py and the Pillow reference column in 4.cas_sharpen.py
-pillow>=11.0
-scikit-image>=0.24
-
-# Optional - only for the learned (deep-learning) methods in 6.night_enhance.py
-# (scunet, zero_dce_pp, flare7kpp). Uncomment to install.
-# torch>=2.4
-# spandrel>=0.4
-# timm>=1.0
-# einops>=0.8
